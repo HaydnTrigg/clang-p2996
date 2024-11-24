@@ -619,6 +619,9 @@ void MicrosoftCXXNameMangler::mangle(GlobalDecl GD, StringRef Prefix) {
     mangleFunctionEncoding(GD, Context.shouldMangleDeclName(FD));
   else if (const VarDecl *VD = dyn_cast<VarDecl>(D))
     mangleVariableEncoding(VD);
+  else if (isa<FieldDecl>(GD.getDecl())) {
+    // don't do anything?
+  }
   else if (isa<MSGuidDecl>(D))
     // MSVC appears to mangle GUIDs as if they were variables of type
     // 'const struct __s_GUID'.
@@ -2165,7 +2168,8 @@ void MicrosoftCXXNameMangler::mangleTemplateArgValue(QualType T,
   }
 
   case APValue::Reflection:
-    llvm_unreachable("reflection arguments should be separately handled");
+    mangleReflection(V);
+    return;
   }
 }
 
@@ -2193,9 +2197,34 @@ void MicrosoftCXXNameMangler::mangleReflection(const APValue &R) {
     Context.mangleCanonicalTypeName(QT, Out, false);
     break;
   }
+  case ReflectionKind::Declaration: {
+    Out << 'd';
+
+    Decl *D = R.getReflectedDecl();
+    if (auto *ED = dyn_cast<EnumConstantDecl>(D)) {
+      mangleIntegerLiteral(ED->getInitVal());
+    } else if (auto *CD = dyn_cast<CXXConstructorDecl>(D)) {
+      GlobalDecl GD(CD, Ctor_Complete);
+      mangle(GD);
+    } else if (auto *DD = dyn_cast<CXXDestructorDecl>(D)) {
+      GlobalDecl GD(DD, Dtor_Complete);
+      mangle(GD);
+    } else if (auto *PVD = dyn_cast<ParmVarDecl>(D)) {
+      if (const FunctionDecl *Func =
+              dyn_cast<FunctionDecl>(PVD->getDeclContext())) {
+        Out << 'p';
+        unsigned Num = Func->getNumParams() - PVD->getFunctionScopeIndex();
+        if (Num > 1)
+          mangleNumber(Num - 2);
+        Out << '_';
+      }
+    } else {
+      mangle(cast<NamedDecl>(D));
+    }
+    break;
+  }
   case ReflectionKind::Object:
   case ReflectionKind::Value:
-  case ReflectionKind::Declaration:
   case ReflectionKind::Template:
   case ReflectionKind::Namespace:
   case ReflectionKind::BaseSpecifier:
